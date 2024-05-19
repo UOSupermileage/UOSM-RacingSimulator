@@ -38,7 +38,7 @@ class Node:
 
     def create_transition(
         self,
-        target: Node,
+        targets: list[Node],
         mass: FloatTensor,
         coefficient_of_gravity: FloatTensor,
         coefficient_of_friction: FloatTensor,
@@ -47,66 +47,88 @@ class Node:
         get_projected_area: Callable[[float], float],
         wind_velocity: FloatTensor,
         wind_bearing: FloatTensor,
-    ) -> Transition:
+    ) -> list[Transition]:
 
         weight = mass * coefficient_of_gravity
 
-        slope = Location.slope(self.position, target.position)
-        bearing = Location.bearing(self.position, target.position)
+        slopes = torch.tensor(
+            [Location.slope(self.position, target.position) for target in targets],
+            device=device,
+        )
+        bearings = torch.tensor(
+            [Location.bearing(self.position, target.position) for target in targets],
+            device=device,
+        )
+
+        target_velocities = torch.tensor(
+            [target.velocity for target in targets], device=device
+        )
 
         # Gravitational Force (Weight)'s parallel component, assists you down a slope, resists you up a slope
-        force_gx = weight * torch.sin(slope)
+        forces_gx = weight * torch.sin(slopes)
 
         # Frictional Force, it always opposes velocity
-        force_friction = coefficient_of_friction * weight * torch.cos(slope)
+        forces_friction = coefficient_of_friction * weight * torch.cos(slopes)
 
-        coefficent_of_drag = tensor(get_coefficent_of_drag(bearing), device=device)
-        projected_area = tensor(get_projected_area(bearing), device=device)
+        coefficents_of_drag = tensor(
+            [get_coefficent_of_drag(bearing) for bearing in bearings], device=device
+        )
+        projected_areas = tensor(
+            [get_projected_area(bearing) for bearing in bearings], device=device
+        )
 
-        delta_bearing = wind_bearing - bearing
-        opposing_wind_velocity = wind_velocity * torch.cos(delta_bearing)
-        effective_wind_velocity = opposing_wind_velocity - target.velocity
+        delta_bearings = wind_bearing - bearings
+        opposing_wind_velocities = wind_velocity * torch.cos(delta_bearings)
+        effective_wind_velocities = opposing_wind_velocities - target_velocities
 
-        force_drag = (
+        forces_drag = (
             0.5
             * air_density
-            * (torch.pow(effective_wind_velocity, 2))
-            * coefficent_of_drag
-            * projected_area
+            * (torch.pow(effective_wind_velocities, 2))
+            * coefficents_of_drag
+            * projected_areas
         )
 
         # Work needed to reach the target velocity
         delta_work = (
-            0.5 * mass * (torch.pow(target.velocity, 2) - torch.pow(self.velocity, 2))
+            0.5 * mass * (torch.pow(target_velocities, 2) - torch.pow(self.velocity, 2))
         )
 
         # The x component of gravity always apposes
-        affecting_forces = -force_friction
+        affecting_forces = -forces_friction
 
         # If the slope is a negative incline, gravity assists the motion
-        affecting_forces += force_gx if slope < 0 else -1 * force_gx
+        affecting_forces += torch.where(slopes < 0, forces_gx, -forces_gx)
 
         # If the wind is going faster in the same direction as the car
-        affecting_forces += (
-            force_drag if effective_wind_velocity > 0 else -1 * force_drag
+        affecting_forces += torch.where(
+            effective_wind_velocities > 0, forces_drag, -forces_drag
         )
 
         work_required = delta_work - affecting_forces
 
         # Calculate the time required to transition to the given node
-        delta_distance = Location.distance(self.position, target.position)
-        time_required = (
-            0
-            if delta_distance == 0
-            else (
-                tensor(torch.inf, device=device)
-                if target.velocity == 0
-                else (3.6 / target.velocity) * delta_distance
-            )
+        delta_distances = torch.tensor(
+            [Location.distance(self.position, target.position) for target in targets],
+            device=device,
+        )
+        time_required = torch.where(
+            delta_distances == 0,
+            0,
+            torch.where(
+                target_velocities == 0,
+                float("inf"),
+                3.6 * delta_distances / target_velocities,
+            ),
         )
 
-        transition = Transition(target, work_required, time_required)
-        return transition
+        transitions = [
+            Transition(target, work_required_item, time_required_item)
+            for target, work_required_item, time_required_item in zip(
+                targets, work_required, time_required
+            )
+        ]
+        return transitions
 
 
 @dataclass(slots=True)
@@ -189,20 +211,18 @@ class Graph:
                     velocity += velocity_step_size
 
             for node in current_layer:
-                for target in targets:
-                    transition = node.create_transition(
-                        target=target,
-                        mass=mass_tensor,
-                        coefficient_of_gravity=coefficient_of_gravity_tensor,
-                        coefficient_of_friction=coefficient_of_friction_tensor,
-                        air_density=air_density_tensor,
-                        get_coefficent_of_drag=get_coefficient_of_drag,
-                        get_projected_area=get_projected_area,
-                        wind_velocity=wind_velocity_tensor,
-                        wind_bearing=wind_bearing_tensor,
-                    )
-                    node.transitions.append(transition)
-
+                transitions = node.create_transition(
+                    target=targets,
+                    mass=mass_tensor,
+                    coefficient_of_gravity=coefficient_of_gravity_tensor,
+                    coefficient_of_friction=coefficient_of_friction_tensor,
+                    air_density=air_density_tensor,
+                    get_coefficent_of_drag=get_coefficient_of_drag,
+                    get_projected_area=get_projected_area,
+                    wind_velocity=wind_velocity_tensor,
+                    wind_bearing=wind_bearing_tensor,
+                )
+                node.transitions.extend(transitions)
             current_layer = targets
 
         return graph
