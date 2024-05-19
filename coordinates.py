@@ -55,6 +55,17 @@ class Location:
         )
         return distance_with_altitude(d, a.altitude, b.altitude)
 
+    def slope(a: Location, b: Location, radius: float = EARTH_RADIUS) -> float:
+        """Returns the slope in radians to get from a to b"""
+
+        # TODO: Might make more sense to calculate the straight line cartesian distance
+        distance = great_circle_distance(
+            a.latitude, a.longitude, b.latitude, b.longitude, radius
+        )
+        height = b.altitude - a.altitude
+        angle = m.atan(height / distance)
+        return angle
+
     def bearing(a: Location, b: Location) -> float:
         latitude_a_radians = m.radians(a.latitude)
         latitude_b_radians = m.radians(b.latitude)
@@ -98,7 +109,10 @@ class Location:
             2 * m.pi
         ) - m.pi
 
-        percentage_of_distance_traveled = distance / Location.distance(a, b)
+        total_distance = Location.distance(a, b)
+        percentage_of_distance_traveled = (
+            1 if total_distance == 0 else distance / total_distance
+        )
         destination_altitude = a.altitude + percentage_of_distance_traveled * (
             b.altitude - a.altitude
         )
@@ -142,3 +156,13 @@ class Checkpoint:
             locations.append(point)
 
         return locations
+
+
+if __name__ == "__main__":
+    print("Testing Checkpoint")
+
+    a = Location(20, 21, 0)
+    b = Location(20, 21, 0)
+
+    checkpoint = Checkpoint(a, b)
+    print(checkpoint.points(1))
