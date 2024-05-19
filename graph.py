@@ -1,16 +1,19 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from coordinates import Location, Checkpoint
+from coordinates import Location, Checkpoint, device
 import math as m
 import copy
 from collections.abc import Callable
+
+from torch import FloatTensor, IntTensor, tensor
+import torch
 
 
 @dataclass(slots=True)
 class Transition:
     target: Node
-    work_required: float
-    time_required: float
+    work_required: FloatTensor
+    time_required: FloatTensor
 
 
 @dataclass(slots=True)
@@ -18,17 +21,17 @@ class Node:
     """A Node in the Graph"""
 
     # Ensure uniqueness for identifiability
-    id: int
+    id: IntTensor
 
     transitions: list[Transition]
 
-    kinetic_energy: float
+    kinetic_energy: FloatTensor
 
     position: Location
-    velocity: float
+    velocity: FloatTensor
 
     # Keep track of motor velocity, it will always be a maxium of the current velocity, but can be less when ramping up the motor or coasting
-    motor_velocity: float
+    motor_velocity: FloatTensor
 
     def __eq__(self, value: object) -> bool:
         return isinstance(value, Node) and value.id == self.id
@@ -36,14 +39,14 @@ class Node:
     def create_transition(
         self,
         target: Node,
-        mass: float,
-        coefficient_of_gravity: float,
-        coefficient_of_friction: float,
-        air_density: float,
+        mass: FloatTensor,
+        coefficient_of_gravity: FloatTensor,
+        coefficient_of_friction: FloatTensor,
+        air_density: FloatTensor,
         get_coefficent_of_drag: Callable[[float], float],
         get_projected_area: Callable[[float], float],
-        wind_velocity: float,
-        wind_bearing: float,
+        wind_velocity: FloatTensor,
+        wind_bearing: FloatTensor,
     ) -> Transition:
 
         weight = mass * coefficient_of_gravity
@@ -52,28 +55,30 @@ class Node:
         bearing = Location.bearing(self.position, target.position)
 
         # Gravitational Force (Weight)'s parallel component, assists you down a slope, resists you up a slope
-        force_gx = weight * m.sin(slope)
+        force_gx = weight * torch.sin(slope)
 
         # Frictional Force, it always opposes velocity
-        force_friction = coefficient_of_friction * weight * m.cos(slope)
+        force_friction = coefficient_of_friction * weight * torch.cos(slope)
 
-        coefficent_of_drag = get_coefficent_of_drag(bearing)
-        projected_area = get_projected_area(bearing)
+        coefficent_of_drag = tensor(get_coefficent_of_drag(bearing), device=device)
+        projected_area = tensor(get_projected_area(bearing), device=device)
 
         delta_bearing = wind_bearing - bearing
-        opposing_wind_velocity = wind_velocity * m.cos(m.radians(delta_bearing))
+        opposing_wind_velocity = wind_velocity * torch.cos(delta_bearing)
         effective_wind_velocity = opposing_wind_velocity - target.velocity
 
         force_drag = (
             0.5
             * air_density
-            * (effective_wind_velocity**2)
+            * (torch.pow(effective_wind_velocity, 2))
             * coefficent_of_drag
             * projected_area
         )
 
         # Work needed to reach the target velocity
-        delta_work = 0.5 * mass * (target.velocity**2 - self.velocity**2)
+        delta_work = (
+            0.5 * mass * (torch.pow(target.velocity, 2) - torch.pow(self.velocity, 2))
+        )
 
         # The x component of gravity always apposes
         affecting_forces = -force_friction
@@ -94,7 +99,7 @@ class Node:
             0
             if delta_distance == 0
             else (
-                float("inf")
+                tensor(torch.inf, device=device)
                 if target.velocity == 0
                 else (3.6 / target.velocity) * delta_distance
             )
@@ -130,6 +135,15 @@ class Graph:
         if len(checkpoints) < 2:
             raise ValueError("Cannot create Graph without at least 2 checkpoints")
 
+        max_velocity_tensor = tensor(max_velocity, device=device)
+        max_motor_velocity_tensor = tensor(max_motor_velocity, device=device)
+        wind_velocity_tensor = tensor(wind_velocity, device=device)
+        wind_bearing_tensor = tensor(wind_bearing, device=device)
+        mass_tensor = tensor(mass, device=device)
+        coefficient_of_friction_tensor = tensor(coefficient_of_friction, device=device)
+        coefficient_of_gravity_tensor = tensor(9.8, device=device)
+        air_density_tensor = tensor(1.225, device=device)
+
         node_index = 0
 
         starting_checkpoint = checkpoints[0]
@@ -137,10 +151,10 @@ class Graph:
         starting_node = Node(
             id=node_index,
             transitions=[],
-            kinetic_energy=0,
+            kinetic_energy=tensor(0, device=device),
             position=starting_point,
-            velocity=0,
-            motor_velocity=0,
+            velocity=tensor(0, device=device),
+            motor_velocity=tensor(0, device=device),
         )
         node_index += 1
 
@@ -155,14 +169,14 @@ class Graph:
             targets: list[Node] = []
 
             for location in location_points:
-                velocity = 0
-                while velocity < max_velocity:
-                    motor_velocity = 0
-                    while motor_velocity < max_motor_velocity:
+                velocity = tensor(0, device=device)
+                while velocity < max_velocity_tensor:
+                    motor_velocity = tensor(0, device=device)
+                    while motor_velocity < max_motor_velocity_tensor:
                         target = Node(
                             node_index,
                             transitions=[],
-                            kinetic_energy=0,
+                            kinetic_energy=tensor(0, device=device),
                             position=location,
                             velocity=velocity,
                             motor_velocity=motor_velocity,
@@ -178,14 +192,14 @@ class Graph:
                 for target in targets:
                     transition = node.create_transition(
                         target=target,
-                        mass=mass,
-                        coefficient_of_gravity=9.8,
-                        coefficient_of_friction=coefficient_of_friction,
-                        air_density=1.225,
+                        mass=mass_tensor,
+                        coefficient_of_gravity=coefficient_of_gravity_tensor,
+                        coefficient_of_friction=coefficient_of_friction_tensor,
+                        air_density=air_density_tensor,
                         get_coefficent_of_drag=get_coefficient_of_drag,
                         get_projected_area=get_projected_area,
-                        wind_velocity=wind_velocity,
-                        wind_bearing=wind_bearing,
+                        wind_velocity=wind_velocity_tensor,
+                        wind_bearing=wind_bearing_tensor,
                     )
                     node.transitions.append(transition)
 

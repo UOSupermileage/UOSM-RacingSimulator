@@ -2,112 +2,128 @@ from __future__ import annotations
 import math as m
 from dataclasses import dataclass
 
+import torch
+from torch import tensor, FloatTensor
+
 # Earth's radius in meters
-EARTH_RADIUS = 6378137
+device = "mps"
+earth_radius = tensor(6378137, device=device)
+
+
+def setup(device_name: str, radius: float):
+    global device
+    global earth_radius
+
+    device = device_name
+    earth_radius = radius
 
 
 def great_circle_distance(
-    latitude1: float,
-    longitude1: float,
-    latitude2: float,
-    longitude2: float,
-    radius: float,
-) -> float:
+    latitude1: FloatTensor,
+    longitude1: FloatTensor,
+    latitude2: FloatTensor,
+    longitude2: FloatTensor,
+) -> FloatTensor:
     """Compute the greater circle distance on a sphere using the Haversine formula
     Returns the distance in meters.
     """
 
-    phi1 = m.radians(latitude1)
-    phi2 = m.radians(latitude2)
+    delta_phi = latitude2 - latitude1
+    delta_lambda = longitude2 - longitude1
 
-    lambda1 = m.radians(longitude1)
-    lambda2 = m.radians(longitude2)
+    a = torch.pow(torch.sin(delta_phi / 2.0), 2) + torch.cos(latitude1) * torch.cos(
+        latitude2
+    ) * torch.pow(torch.sin(delta_lambda / 2.0), 2)
 
-    delta_phi = phi2 - phi1
-    delta_lambda = lambda2 - lambda1
+    c = 2 * torch.atan2(torch.sqrt(a), torch.sqrt(1 - a))
 
-    a = (
-        m.sin(delta_phi / 2.0) ** 2
-        + m.cos(phi1) * m.cos(phi2) * m.sin(delta_lambda / 2.0) ** 2
-    )
-
-    c = 2 * m.atan2(m.sqrt(a), m.sqrt(1 - a))
-
-    meters = radius * c
+    meters = earth_radius * c
     return meters
 
 
-def distance_with_altitude(distance: float, altitude1: float, altitude2: float):
-    return m.sqrt(distance**2 + (altitude2 - altitude1) ** 2)
+def distance_with_altitude(
+    distance: FloatTensor, altitude1: FloatTensor, altitude2: FloatTensor
+) -> FloatTensor:
+    return torch.sqrt(torch.pow(distance, 2) + torch.pow((altitude2 - altitude1), 2))
 
 
 @dataclass(slots=True)
 class Location:
     """Represents a location on a sphere."""
 
-    latitude: float  # in degrees
-    longitude: float  # in degrees
-    altitude: float  # in meters
+    latitude: FloatTensor  # in degrees
+    longitude: FloatTensor  # in degrees
+    altitude: FloatTensor  # in meters
 
-    def distance(a: Location, b: Location, radius: float = EARTH_RADIUS) -> float:
-        d = great_circle_distance(
-            a.latitude, a.longitude, b.latitude, b.longitude, radius
+    def construct(latitude: float, longitude: float, altitude: float) -> Location:
+        return Location(
+            tensor(latitude, device=device),
+            tensor(longitude, device=device),
+            tensor(altitude, device=device),
         )
+
+    def distance(
+        a: Location,
+        b: Location,
+    ) -> FloatTensor:
+        d = great_circle_distance(a.latitude, a.longitude, b.latitude, b.longitude)
         return distance_with_altitude(d, a.altitude, b.altitude)
 
-    def slope(a: Location, b: Location, radius: float = EARTH_RADIUS) -> float:
+    def slope(
+        a: Location,
+        b: Location,
+    ) -> FloatTensor:
         """Returns the slope in radians to get from a to b"""
 
         # TODO: Might make more sense to calculate the straight line cartesian distance
         distance = great_circle_distance(
-            a.latitude, a.longitude, b.latitude, b.longitude, radius
+            a.latitude, a.longitude, b.latitude, b.longitude
         )
         height = b.altitude - a.altitude
-        angle = m.atan(height / distance)
+        angle = torch.atan(height / distance)
         return angle
 
-    def bearing(a: Location, b: Location) -> float:
-        latitude_a_radians = m.radians(a.latitude)
-        latitude_b_radians = m.radians(b.latitude)
-        longitude_delta_radians = m.radians(b.longitude - a.longitude)
+    def bearing(a: Location, b: Location) -> FloatTensor:
+        longitude_delta = b.longitude - a.longitude
 
-        y = m.sin(longitude_delta_radians) * m.cos(latitude_b_radians)
-        x = m.cos(latitude_a_radians) * m.sin(latitude_b_radians) - m.sin(
-            latitude_a_radians
-        ) * m.cos(latitude_b_radians) * m.cos(longitude_delta_radians)
-        bearing_radians = m.atan2(y, x)
+        y = torch.sin(longitude_delta) * torch.cos(b.latitude)
+        x = torch.cos(a.latitude) * torch.sin(b.latitude) - torch.sin(
+            a.latitude
+        ) * torch.cos(b.latitude) * torch.cos(longitude_delta)
+        bearing_radians = torch.atan2(y, x)
 
-        return (m.degrees(bearing_radians) + 360) % 360
+        return torch.fmod(bearing_radians + 2 * torch.pi, 2 * torch.pi)
 
     def interpolated_position_towards_target(
-        a: Location, b: Location, distance: float, radius: float = EARTH_RADIUS
+        a: Location, b: Location, distance: FloatTensor
     ) -> Location:
         """Interpolation a position on a sphere of a given radius that is distance towards b from a"""
 
-        distance_radians = distance / radius
-        bearing_radians = m.radians(Location.bearing(a, b))
+        distance_radians = distance / earth_radius
+        bearing_radians = Location.bearing(a, b)
 
-        initial_latitude_radians = m.radians(a.latitude)
-        initial_longitude_radians = m.radians(a.longitude)
+        initial_latitude_radians = a.latitude
+        initial_longitude_radians = a.longitude
 
-        destination_latitude_radians = m.asin(
-            m.sin(initial_latitude_radians) * m.cos(distance_radians)
-            + m.cos(initial_latitude_radians)
-            * m.sin(distance_radians)
-            * m.cos(bearing_radians)
+        destination_latitude_radians = torch.asin(
+            torch.sin(initial_latitude_radians) * torch.cos(distance_radians)
+            + torch.cos(initial_latitude_radians)
+            * torch.sin(distance_radians)
+            * torch.cos(bearing_radians)
         )
-        destination_longitude_radians = initial_longitude_radians + m.atan2(
-            m.sin(bearing_radians)
-            * m.sin(distance_radians)
-            * m.cos(initial_latitude_radians),
-            m.cos(distance_radians)
-            - m.sin(initial_latitude_radians) * m.sin(destination_latitude_radians),
+        destination_longitude_radians = initial_longitude_radians + torch.atan2(
+            torch.sin(bearing_radians)
+            * torch.sin(distance_radians)
+            * torch.cos(initial_latitude_radians),
+            torch.cos(distance_radians)
+            - torch.sin(initial_latitude_radians)
+            * torch.sin(destination_latitude_radians),
         )
 
         # Normalize destination longitude to be within -pi and +pi radians
-        destination_longitude_radians = (destination_longitude_radians + 3 * m.pi) % (
-            2 * m.pi
-        ) - m.pi
+        destination_longitude_radians = (
+            destination_longitude_radians + 3 * torch.pi
+        ) % (2 * torch.pi) - torch.pi
 
         total_distance = Location.distance(a, b)
         percentage_of_distance_traveled = (
@@ -118,8 +134,8 @@ class Location:
         )
 
         return Location(
-            m.degrees(destination_latitude_radians),
-            m.degrees(destination_longitude_radians),
+            destination_latitude_radians,
+            destination_longitude_radians,
             destination_altitude,
         )
 
@@ -161,8 +177,15 @@ class Checkpoint:
 if __name__ == "__main__":
     print("Testing Checkpoint")
 
-    a = Location(20, 21, 0)
-    b = Location(20, 21, 0)
+    a = Location.construct(m.radians(20), m.radians(21), 0)
+    b = Location.construct(m.radians(25), m.radians(22), 0)
+
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+
+    print(
+        "Distance: ",
+        great_circle_distance(a.latitude, a.longitude, b.latitude, b.longitude),
+    )
 
     checkpoint = Checkpoint(a, b)
-    print(checkpoint.points(1))
+    print(checkpoint.points(5))
