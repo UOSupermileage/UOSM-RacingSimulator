@@ -6,7 +6,7 @@ import torch
 from torch import tensor, FloatTensor
 
 # Earth's radius in meters
-device = "mps"
+device = "cuda"
 earth_radius = tensor(6378137, device=device)
 
 

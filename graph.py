@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from torch import FloatTensor, IntTensor, tensor
 import torch
+import torch.autograd.profiler as profiler
 
 
 @dataclass(slots=True)
@@ -159,6 +160,8 @@ class Graph:
 
         max_velocity_tensor = tensor(max_velocity, device=device)
         max_motor_velocity_tensor = tensor(max_motor_velocity, device=device)
+        velocity_step_size_tensor = tensor(velocity_step_size, device=device)
+        motor_velocity_step_size_tensor = tensor(motor_velocity_step_size, device=device)
         wind_velocity_tensor = tensor(wind_velocity, device=device)
         wind_bearing_tensor = tensor(wind_bearing, device=device)
         mass_tensor = tensor(mass, device=device)
@@ -207,22 +210,30 @@ class Graph:
                         targets.append(target)
 
                         node_index += 1
-                        motor_velocity += motor_velocity_step_size
-                    velocity += velocity_step_size
+                        motor_velocity = motor_velocity + motor_velocity_step_size_tensor
+                    velocity = velocity + velocity_step_size_tensor
 
             for node in current_layer:
-                transitions = node.create_transition(
-                    target=targets,
-                    mass=mass_tensor,
-                    coefficient_of_gravity=coefficient_of_gravity_tensor,
-                    coefficient_of_friction=coefficient_of_friction_tensor,
-                    air_density=air_density_tensor,
-                    get_coefficent_of_drag=get_coefficient_of_drag,
-                    get_projected_area=get_projected_area,
-                    wind_velocity=wind_velocity_tensor,
-                    wind_bearing=wind_bearing_tensor,
-                )
-                node.transitions.extend(transitions)
+                print(f"Calculating transitions of size: {len(targets)}")
+
+                with profiler.profile(record_shapes=True) as prof:
+                    transitions = node.create_transition(
+                        targets=targets,
+                        mass=mass_tensor,
+                        coefficient_of_gravity=coefficient_of_gravity_tensor,
+                        coefficient_of_friction=coefficient_of_friction_tensor,
+                        air_density=air_density_tensor,
+                        get_coefficent_of_drag=get_coefficient_of_drag,
+                        get_projected_area=get_projected_area,
+                        wind_velocity=wind_velocity_tensor,
+                        wind_bearing=wind_bearing_tensor,
+                    )
+
+                    node.transitions.extend(transitions)
+
+                    # Analyze the results
+                    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
             current_layer = targets
 
         return graph
