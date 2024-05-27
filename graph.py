@@ -48,6 +48,7 @@ class Node:
         get_projected_area: Callable[[float], float],
         wind_velocity: FloatTensor,
         wind_bearing: FloatTensor,
+        max_motor_force: FloatTensor
     ) -> list[Transition]:
 
         weight = mass * coefficient_of_gravity
@@ -113,6 +114,10 @@ class Node:
             [Location.distance(self.position, target.position) for target in targets],
             device=device,
         )
+
+        motor_force_required = work_required / delta_distances
+        motor_is_capable = motor_force_required <= max_motor_force.expand_as(motor_force_required)
+
         time_required = torch.where(
             delta_distances == 0,
             0,
@@ -125,9 +130,9 @@ class Node:
 
         transitions = [
             Transition(target, work_required_item, time_required_item)
-            for target, work_required_item, time_required_item in zip(
-                targets, work_required, time_required
-            )
+            for target, work_required_item, time_required_item, motor_is_capable_item in zip(
+                targets, work_required, time_required, motor_is_capable
+            ) if motor_is_capable_item == 1
         ]
         return transitions
 
@@ -149,6 +154,7 @@ class Graph:
         coefficient_of_friction: float,
         get_coefficient_of_drag: Callable[[float], float],
         get_projected_area: Callable[[float], float],
+        max_motor_force: float
     ) -> Graph:
         """Construct a graph from a list of checkpoints.
 
@@ -168,11 +174,13 @@ class Graph:
         coefficient_of_friction_tensor = tensor(coefficient_of_friction, device=device)
         coefficient_of_gravity_tensor = tensor(9.8, device=device)
         air_density_tensor = tensor(1.225, device=device)
+        max_motor_force_tensor = tensor(max_motor_force, device=device)
 
         node_index = 0
 
         starting_checkpoint = checkpoints[0]
         starting_point = starting_checkpoint.points(1)[0]
+        print(f"Starting point: {starting_point}")
         starting_node = Node(
             id=node_index,
             transitions=[],
@@ -197,7 +205,9 @@ class Graph:
                 velocity = tensor(0, device=device)
                 while velocity < max_velocity_tensor:
                     motor_velocity = tensor(0, device=device)
-                    while motor_velocity < max_motor_velocity_tensor:
+                    
+                    # Motor cannot go faster than its max or the target speed of the car
+                    while motor_velocity < max_motor_velocity_tensor and motor_velocity <= velocity:
                         target = Node(
                             node_index,
                             transitions=[],
@@ -213,27 +223,23 @@ class Graph:
                         motor_velocity = motor_velocity + motor_velocity_step_size_tensor
                     velocity = velocity + velocity_step_size_tensor
 
+            transitioned_nodes = []
             for node in current_layer:
-                print(f"Calculating transitions of size: {len(targets)}")
+                node.transitions = node.create_transition(
+                    targets=targets,
+                    mass=mass_tensor,
+                    coefficient_of_gravity=coefficient_of_gravity_tensor,
+                    coefficient_of_friction=coefficient_of_friction_tensor,
+                    air_density=air_density_tensor,
+                    get_coefficent_of_drag=get_coefficient_of_drag,
+                    get_projected_area=get_projected_area,
+                    wind_velocity=wind_velocity_tensor,
+                    wind_bearing=wind_bearing_tensor,
+                    max_motor_force=max_motor_force_tensor
+                )
 
-                with profiler.profile(record_shapes=True) as prof:
-                    transitions = node.create_transition(
-                        targets=targets,
-                        mass=mass_tensor,
-                        coefficient_of_gravity=coefficient_of_gravity_tensor,
-                        coefficient_of_friction=coefficient_of_friction_tensor,
-                        air_density=air_density_tensor,
-                        get_coefficent_of_drag=get_coefficient_of_drag,
-                        get_projected_area=get_projected_area,
-                        wind_velocity=wind_velocity_tensor,
-                        wind_bearing=wind_bearing_tensor,
-                    )
+                transitioned_nodes.extend([transition.target for transition in node.transitions])
 
-                    node.transitions.extend(transitions)
-
-                    # Analyze the results
-                    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-
-            current_layer = targets
+            current_layer = transitioned_nodes
 
         return graph
