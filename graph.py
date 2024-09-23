@@ -8,6 +8,7 @@ from collections.abc import Callable
 from torch import FloatTensor, IntTensor, tensor
 import torch
 import torch.autograd.profiler as profiler
+from tqdm import tqdm
 
 
 @dataclass(slots=True)
@@ -37,6 +38,9 @@ class Node:
     def __eq__(self, value: object) -> bool:
         return isinstance(value, Node) and value.id == self.id
 
+    def __hash__(self):
+        return hash(id)
+
     def create_transition(
         self,
         targets: list[Node],
@@ -49,9 +53,7 @@ class Node:
         wind_velocity: FloatTensor,
         wind_bearing: FloatTensor,
     ) -> list[Transition]:
-
-        weight = mass * coefficient_of_gravity
-
+        
         slopes = torch.tensor(
             [Location.slope(self.position, target.position) for target in targets],
             device=device,
@@ -64,12 +66,14 @@ class Node:
         target_velocities = torch.tensor(
             [target.velocity for target in targets], device=device
         )
+        
+        weight = mass * coefficient_of_gravity # For forces!!!
 
         # Gravitational Force (Weight)'s parallel component, assists you down a slope, resists you up a slope
-        forces_gx = weight * torch.sin(slopes)
+        forces_gx = torch.abs(weight * torch.sin(slopes))
 
         # Frictional Force, it always opposes velocity
-        forces_friction = coefficient_of_friction * weight * torch.cos(slopes)
+        forces_friction = torch.abs(coefficient_of_friction * weight * torch.cos(slopes))
 
         coefficents_of_drag = tensor(
             [get_coefficent_of_drag(bearing) for bearing in bearings], device=device
@@ -80,21 +84,26 @@ class Node:
 
         delta_bearings = wind_bearing - bearings
         opposing_wind_velocities = wind_velocity * torch.cos(delta_bearings)
-        effective_wind_velocities = opposing_wind_velocities - target_velocities
+        
+        # Consider the average to be more acurate since we don't instantly accelerate
+        average_target_velocities = (self.velocity + target_velocities) / 2
+        
+        # The relative of the wind with respect to the car
+        effective_wind_velocities = average_target_velocities - opposing_wind_velocities
 
         forces_drag = (
             0.5
             * air_density
-            * (torch.pow(effective_wind_velocities, 2))
+            * effective_wind_velocities * effective_wind_velocities
             * coefficents_of_drag
             * projected_areas
         )
 
-        # Work needed to reach the target velocity
-        delta_work = (
+        # Change in kinetic energy to reach target velocity
+        delta_kinetic = (
             0.5 * mass * (torch.pow(target_velocities, 2) - torch.pow(self.velocity, 2))
         )
-
+        
         # The x component of gravity always apposes
         affecting_forces = -forces_friction
 
@@ -102,25 +111,30 @@ class Node:
         affecting_forces += torch.where(slopes < 0, forces_gx, -forces_gx)
 
         # If the wind is going faster in the same direction as the car
+        # TODO: This is innacurate if we accelerate faster than the wind speed throughout the step
         affecting_forces += torch.where(
             effective_wind_velocities > 0, forces_drag, -forces_drag
         )
-
-        work_required = delta_work - affecting_forces
-
+        
+        # print([Location.distance(self.position, target.position) for target in targets])
+        
         # Calculate the time required to transition to the given node
         delta_distances = torch.tensor(
             [Location.distance(self.position, target.position) for target in targets],
             device=device,
         )
+
+        # Multiply force by distance to get affecting energy
+        affecting_energies = affecting_forces * delta_distances
+        
+        work_required = delta_kinetic - affecting_energies
+
+        delta_velocities = target_velocities - self.velocity
+
         time_required = torch.where(
-            delta_distances == 0,
-            0,
-            torch.where(
-                target_velocities == 0,
-                float("inf"),
-                3.6 * delta_distances / target_velocities,
-            ),
+            delta_velocities == 0,
+            delta_distances / target_velocities,
+            torch.abs(2 * delta_distances / delta_velocities)
         )
 
         transitions = [
@@ -135,6 +149,7 @@ class Node:
 @dataclass(slots=True)
 class Graph:
     start: Node
+    end: Node = None
 
     def construct(
         checkpoints: list[Checkpoint],
@@ -188,16 +203,20 @@ class Graph:
         current_layer: list[Node] = [starting_node]
 
         # Iterate over all the checkpoints, constructing each checkpoints corresponding layer of nodes
-        for i, checkpoint in enumerate(checkpoints[1:]):
+        for i, checkpoint in tqdm(enumerate(checkpoints[1:])):
             print(f"Processing checkpoint {i}. Layer size: {len(current_layer)}")
             location_points = checkpoint.points(n_points_per_checkpoint)
             targets: list[Node] = []
 
+            if i is (len(checkpoints[1:]) - 1):
+                max_velocity_tensor = tensor(0, device=device)
+                max_motor_velocity_tensor = tensor(0, device=device)
+                
             for location in location_points:
                 velocity = tensor(0, device=device)
-                while velocity < max_velocity_tensor:
+                while velocity <= max_velocity_tensor:
                     motor_velocity = tensor(0, device=device)
-                    while motor_velocity < max_motor_velocity_tensor:
+                    while motor_velocity <= max_motor_velocity_tensor:                        
                         target = Node(
                             node_index,
                             transitions=[],
@@ -213,27 +232,46 @@ class Graph:
                         motor_velocity = motor_velocity + motor_velocity_step_size_tensor
                     velocity = velocity + velocity_step_size_tensor
 
-            for node in current_layer:
-                print(f"Calculating transitions of size: {len(targets)}")
+            for node in tqdm(current_layer):
+                transitions = node.create_transition(
+                    targets=targets,
+                    mass=mass_tensor,
+                    coefficient_of_gravity=coefficient_of_gravity_tensor,
+                    coefficient_of_friction=coefficient_of_friction_tensor,
+                    air_density=air_density_tensor,
+                    get_coefficent_of_drag=get_coefficient_of_drag,
+                    get_projected_area=get_projected_area,
+                    wind_velocity=wind_velocity_tensor,
+                    wind_bearing=wind_bearing_tensor,
+                )
 
-                with profiler.profile(record_shapes=True) as prof:
-                    transitions = node.create_transition(
-                        targets=targets,
-                        mass=mass_tensor,
-                        coefficient_of_gravity=coefficient_of_gravity_tensor,
-                        coefficient_of_friction=coefficient_of_friction_tensor,
-                        air_density=air_density_tensor,
-                        get_coefficent_of_drag=get_coefficient_of_drag,
-                        get_projected_area=get_projected_area,
-                        wind_velocity=wind_velocity_tensor,
-                        wind_bearing=wind_bearing_tensor,
-                    )
-
-                    node.transitions.extend(transitions)
-
-                    # Analyze the results
-                    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+                node.transitions.extend(transitions)
+                graph.end = node
 
             current_layer = targets
 
         return graph
+
+    # def get_nodes(self) -> set[Node]:
+    #     """Returns all nodes in the graph"""
+    #     visited_nodes = set()
+        
+    #     cursor = self.start
+    #     cursor_queue: list[Node] = []
+
+    #     while cursor is not None: 
+    #         for transition in cursor.transitions:
+    #             if transition.target not in visited_nodes:
+    #                 cursor_queue.append(transition.target)
+
+    #         visited_nodes.add(cursor)
+    #         next_node = None
+    #         while len(cursor_queue) > 0 and next_node is None:
+    #             candidate = cursor_queue.pop(0)
+    #             if candidate not in visited_nodes:
+    #                 next_node = candidate
+    #         cursor = next_node
+            
+                
+
+    #     return visited_nodes

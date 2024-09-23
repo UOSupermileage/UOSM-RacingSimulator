@@ -8,6 +8,7 @@ from torch import tensor, FloatTensor
 # Earth's radius in meters
 device = "cuda"
 earth_radius = tensor(6378137, device=device)
+ORIGIN = (39.7881314579999,-86.238784119, 218.9818)
 
 
 def setup(device_name: str, radius: float):
@@ -41,33 +42,48 @@ def great_circle_distance(
     return meters
 
 
-def distance_with_altitude(
-    distance: FloatTensor, altitude1: FloatTensor, altitude2: FloatTensor
-) -> FloatTensor:
-    return torch.sqrt(torch.pow(distance, 2) + torch.pow((altitude2 - altitude1), 2))
-
-
 @dataclass(slots=True)
 class Location:
     """Represents a location on a sphere."""
 
-    latitude: FloatTensor  # in degrees
-    longitude: FloatTensor  # in degrees
-    altitude: FloatTensor  # in meters
+    x: FloatTensor  # in degrees
+    y: FloatTensor  # in degrees
+    z: FloatTensor  # in meters
 
     def construct(latitude: float, longitude: float, altitude: float) -> Location:
+        
+        def cartesian(longitude,latitude, elevation):
+            R = earth_radius + elevation  # relative to centre of the earth
+            X = R * torch.cos(longitude) * torch.sin(latitude)
+            Y = R * torch.sin(longitude) * torch.sin(latitude)
+            
+            return X, Y, elevation
+
+        cartesian_origin = cartesian(ORIGIN[0], ORIGIN[1], ORIGIN[2])
+        cartesian_location = cartesian(latitude, longitude, altitude)
+        
+        # The earth is flat
+        relative_x = cartesian_origin[0] - cartesian_location[0]
+        relative_y = cartesian_origin[1] - cartesian_location[1]
+        relative_z = cartesian_origin[2] - cartesian_location[2]
+        
         return Location(
-            tensor(latitude, device=device),
-            tensor(longitude, device=device),
-            tensor(altitude, device=device),
+            tensor(relative_x, device=device),
+            tensor(relative_y, device=device),
+            tensor(relative_z, device=device),
         )
+
+    def distance_with_z(
+        a: Location,
+        b: Location,
+    ) -> FloatTensor:
+        return torch.sqrt((b.x-a.x)**2 + (b.y-a.y)**2 + (b.z-a.z)**2)
 
     def distance(
         a: Location,
         b: Location,
     ) -> FloatTensor:
-        d = great_circle_distance(a.latitude, a.longitude, b.latitude, b.longitude)
-        return distance_with_altitude(d, a.altitude, b.altitude)
+        return torch.sqrt((b.x-a.x)**2 + (b.y-a.y)**2)
 
     def slope(
         a: Location,
@@ -76,67 +92,41 @@ class Location:
         """Returns the slope in radians to get from a to b"""
 
         # TODO: Might make more sense to calculate the straight line cartesian distance
-        distance = great_circle_distance(
-            a.latitude, a.longitude, b.latitude, b.longitude
-        )
-        height = b.altitude - a.altitude
+        distance = Location.distance(a,b)
+        height = b.z - a.z
         angle = torch.atan(height / distance)
         return angle
 
     def bearing(a: Location, b: Location) -> FloatTensor:
-        longitude_delta = b.longitude - a.longitude
-
-        y = torch.sin(longitude_delta) * torch.cos(b.latitude)
-        x = torch.cos(a.latitude) * torch.sin(b.latitude) - torch.sin(
-            a.latitude
-        ) * torch.cos(b.latitude) * torch.cos(longitude_delta)
-        bearing_radians = torch.atan2(y, x)
-
-        return torch.fmod(bearing_radians + 2 * torch.pi, 2 * torch.pi)
-
+        x_delta = b.x - a.x
+        y_delta = b.y - a.y
+        
+        return torch.atan(y_delta / x_delta)
+    
     def interpolated_position_towards_target(
         a: Location, b: Location, distance: FloatTensor
     ) -> Location:
         """Interpolation a position on a sphere of a given radius that is distance towards b from a"""
-
-        distance_radians = distance / earth_radius
-        bearing_radians = Location.bearing(a, b)
-
-        initial_latitude_radians = a.latitude
-        initial_longitude_radians = a.longitude
-
-        destination_latitude_radians = torch.asin(
-            torch.sin(initial_latitude_radians) * torch.cos(distance_radians)
-            + torch.cos(initial_latitude_radians)
-            * torch.sin(distance_radians)
-            * torch.cos(bearing_radians)
-        )
-        destination_longitude_radians = initial_longitude_radians + torch.atan2(
-            torch.sin(bearing_radians)
-            * torch.sin(distance_radians)
-            * torch.cos(initial_latitude_radians),
-            torch.cos(distance_radians)
-            - torch.sin(initial_latitude_radians)
-            * torch.sin(destination_latitude_radians),
-        )
-
-        # Normalize destination longitude to be within -pi and +pi radians
-        destination_longitude_radians = (
-            destination_longitude_radians + 3 * torch.pi
-        ) % (2 * torch.pi) - torch.pi
-
+        
+        dx = b.x - a.x
+        dy = b.y - a.y
+        
+        angle = torch.atan(dy/dx)
+        
+        destination_x = distance * torch.cos(angle)
+        destination_y = distance * torch.sin(angle)
+        
         total_distance = Location.distance(a, b)
-        percentage_of_distance_traveled = (
-            1 if total_distance == 0 else distance / total_distance
-        )
-        destination_altitude = a.altitude + percentage_of_distance_traveled * (
-            b.altitude - a.altitude
+        percentage_of_distance_traveled = distance / total_distance
+
+        destination_z = a.z + percentage_of_distance_traveled * (
+            b.z - a.z
         )
 
         return Location(
-            destination_latitude_radians,
-            destination_longitude_radians,
-            destination_altitude,
+            destination_x,
+            destination_y,
+            destination_z,
         )
 
 
@@ -165,10 +155,11 @@ class Checkpoint:
         step_distance = distance / (n + 1)
 
         locations = []
-        for i in range(1, n + 1):
+        for i in range(1, n + 1):            
             point = Location.interpolated_position_towards_target(
                 self.left, self.right, step_distance * i
             )
+            
             locations.append(point)
 
         return locations
