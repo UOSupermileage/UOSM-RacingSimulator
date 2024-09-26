@@ -40,6 +40,12 @@ class Node:
 
     def __hash__(self):
         return hash(id)
+    
+    def __str__(self) -> str:
+        return f"Node {self.id} [position: {self.position}, velocity: {self.velocity}]"
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
     def create_transition(
         self,
@@ -170,8 +176,8 @@ class Graph:
         Raises a value error if the list is empty.
         """
 
-        if len(checkpoints) < 2:
-            raise ValueError("Cannot create Graph without at least 2 checkpoints")
+        if len(checkpoints) < 1:
+            raise ValueError("Cannot create Graph without at least 1 checkpoint")
 
         max_velocity_tensor = tensor(max_velocity, device=device)
         max_motor_velocity_tensor = tensor(max_motor_velocity, device=device)
@@ -187,7 +193,9 @@ class Graph:
         node_index = 0
 
         starting_checkpoint = checkpoints[0]
+        print(starting_checkpoint)
         starting_point = starting_checkpoint.points(1)[0]
+        print(starting_point)
         starting_node = Node(
             id=node_index,
             transitions=[],

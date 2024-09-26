@@ -6,41 +6,22 @@ import torch
 from torch import tensor, FloatTensor
 
 # Earth's radius in meters
-device = "cuda"
-earth_radius = tensor(6378137, device=device)
-ORIGIN = (39.7881314579999,-86.238784119, 218.9818)
+device: str
+earth_radius: tensor
+origin: tensor
 
 
-def setup(device_name: str, radius: float):
+def setup(device_name: str):
     global device
     global earth_radius
+    global origin
 
     device = device_name
-    earth_radius = radius
 
+    earth_radius = tensor(6378137, device=device)
+    origin = tensor((39.7881314579999,-86.238784119, 218.9818), device=device)
 
-def great_circle_distance(
-    latitude1: FloatTensor,
-    longitude1: FloatTensor,
-    latitude2: FloatTensor,
-    longitude2: FloatTensor,
-) -> FloatTensor:
-    """Compute the greater circle distance on a sphere using the Haversine formula
-    Returns the distance in meters.
-    """
-
-    delta_phi = latitude2 - latitude1
-    delta_lambda = longitude2 - longitude1
-
-    a = torch.pow(torch.sin(delta_phi / 2.0), 2) + torch.cos(latitude1) * torch.cos(
-        latitude2
-    ) * torch.pow(torch.sin(delta_lambda / 2.0), 2)
-
-    c = 2 * torch.atan2(torch.sqrt(a), torch.sqrt(1 - a))
-
-    meters = earth_radius * c
-    return meters
-
+setup("cuda")
 
 @dataclass(slots=True)
 class Location:
@@ -52,6 +33,10 @@ class Location:
 
     def construct(latitude: float, longitude: float, altitude: float) -> Location:
         
+        latitude = tensor(latitude, device=device)
+        longitude = tensor(longitude, device=device)
+        altitude = tensor(altitude, device=device)
+
         def cartesian(longitude,latitude, elevation):
             R = earth_radius + elevation  # relative to centre of the earth
             X = R * torch.cos(longitude) * torch.sin(latitude)
@@ -59,7 +44,7 @@ class Location:
             
             return X, Y, elevation
 
-        cartesian_origin = cartesian(ORIGIN[0], ORIGIN[1], ORIGIN[2])
+        cartesian_origin = cartesian(origin[0], origin[1], origin[2])
         cartesian_location = cartesian(latitude, longitude, altitude)
         
         # The earth is flat
@@ -67,11 +52,7 @@ class Location:
         relative_y = cartesian_origin[1] - cartesian_location[1]
         relative_z = cartesian_origin[2] - cartesian_location[2]
         
-        return Location(
-            tensor(relative_x, device=device),
-            tensor(relative_y, device=device),
-            tensor(relative_z, device=device),
-        )
+        return Location(relative_x,relative_y, relative_z)
 
     def distance_with_z(
         a: Location,
@@ -108,10 +89,27 @@ class Location:
     ) -> Location:
         """Interpolation a position on a sphere of a given radius that is distance towards b from a"""
         
+        print(f"ax: {a.x}, bx: {b.x}, ay: {a.y}, by: {b.y}")
+
+        if a.x == b.x and a.y == b.y:
+            print("Warning: a and b are identical")
+
         dx = b.x - a.x
         dy = b.y - a.y
+
+        if dx == 0 and dy == 0:
+            print("Warning: dx and dy are 0.")
+            return a
         
+        if dx == 0:
+            if dy > 0:
+                return tensor(torch.pi / 2)
+            else:
+                return tensor(torch.pi * 3 / 2)
+
         angle = torch.atan(dy/dx)
+
+        print(f"dx: {dx}, dy: {dy}, angle: {angle}")
         
         destination_x = distance * torch.cos(angle)
         destination_y = distance * torch.sin(angle)
@@ -152,13 +150,20 @@ class Checkpoint:
 
         distance = Location.distance(self.left, self.right)
 
-        step_distance = distance / (n + 1)
+        print(f"left: {self.left}, right: {self.right}, distance: {distance}")
+
+        # Track width is 0, just return the left point
+        if distance == 0:
+            return [self.left]
+
+        step_distance = distance / n
 
         locations = []
         for i in range(1, n + 1):            
             point = Location.interpolated_position_towards_target(
                 self.left, self.right, step_distance * i
             )
+            print(f"Interpolated: {point}")
             
             locations.append(point)
 
@@ -170,13 +175,6 @@ if __name__ == "__main__":
 
     a = Location.construct(m.radians(20), m.radians(21), 0)
     b = Location.construct(m.radians(25), m.radians(22), 0)
-
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-
-    print(
-        "Distance: ",
-        great_circle_distance(a.latitude, a.longitude, b.latitude, b.longitude),
-    )
 
     checkpoint = Checkpoint(a, b)
     print(checkpoint.points(5))
