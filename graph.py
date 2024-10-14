@@ -1,39 +1,46 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import uuid
 from coordinates import Location, Checkpoint, device
 import math as m
 import copy
 from collections.abc import Callable
 
-from torch import FloatTensor, IntTensor, tensor
+from torch import FloatTensor, tensor
 import torch
 import torch.autograd.profiler as profiler
 from tqdm import tqdm
 
 
-@dataclass(slots=True)
 class Transition:
     target: Node
     work_required: FloatTensor
     time_required: FloatTensor
+    id: int
 
+    def __init__(self, target: Node, work_required: FloatTensor, time_required: FloatTensor, id: int) -> None:
+        self.target = target
+        self.work_required = work_required
+        self.time_required = time_required
+        self.id = id
 
-@dataclass(slots=True)
 class Node:
     """A Node in the Graph"""
 
     # Ensure uniqueness for identifiability
-    id: IntTensor
 
     transitions: list[Transition]
-
-    kinetic_energy: FloatTensor
 
     position: Location
     velocity: FloatTensor
 
-    # Keep track of motor velocity, it will always be a maxium of the current velocity, but can be less when ramping up the motor or coasting
-    motor_velocity: FloatTensor
+    id: int
+
+    def __init__(self, transitions: list[Transition], position: Location, velocity: FloatTensor, id: int) -> None:
+        self.transitions = transitions
+        self.position = position
+        self.velocity = velocity
+        self.id = id
 
     def __eq__(self, value: object) -> bool:
         return isinstance(value, Node) and value.id == self.id
@@ -121,9 +128,7 @@ class Node:
         affecting_forces += torch.where(
             effective_wind_velocities > 0, forces_drag, -forces_drag
         )
-        
-        # print([Location.distance(self.position, target.position) for target in targets])
-        
+                
         # Calculate the time required to transition to the given node
         delta_distances = torch.tensor(
             [Location.distance(self.position, target.position) for target in targets],
@@ -133,18 +138,14 @@ class Node:
         # Multiply force by distance to get affecting energy
         affecting_energies = affecting_forces * delta_distances
         
-        work_required = delta_kinetic - affecting_energies
+        work_required = delta_kinetic + affecting_energies
 
         delta_velocities = target_velocities - self.velocity
 
-        time_required = torch.where(
-            delta_velocities == 0,
-            delta_distances / target_velocities,
-            torch.abs(2 * delta_distances / delta_velocities)
-        )
+        time_required = torch.abs(2 * delta_distances / delta_velocities)
 
         transitions = [
-            Transition(target, work_required_item, time_required_item)
+            Transition(target, work_required_item, time_required_item, uuid.uuid4().int)
             for target, work_required_item, time_required_item in zip(
                 targets, work_required, time_required
             )
@@ -157,13 +158,13 @@ class Graph:
     start: Node
     end: Node = None
 
+    nodes: dict[int, Node] = field(default_factory=lambda: dict())
+
     def construct(
         checkpoints: list[Checkpoint],
         n_points_per_checkpoint: int,
         max_velocity: float,  # Max velocity the car is allowed to go is 42 km/h
         velocity_step_size: float,
-        max_motor_velocity: float,  # Max velocity the motor is allowed to go is 40 km/h
-        motor_velocity_step_size: float,
         wind_velocity: float,
         wind_bearing: float,
         mass: float,
@@ -180,9 +181,7 @@ class Graph:
             raise ValueError("Cannot create Graph without at least 1 checkpoint")
 
         max_velocity_tensor = tensor(max_velocity, device=device)
-        max_motor_velocity_tensor = tensor(max_motor_velocity, device=device)
         velocity_step_size_tensor = tensor(velocity_step_size, device=device)
-        motor_velocity_step_size_tensor = tensor(motor_velocity_step_size, device=device)
         wind_velocity_tensor = tensor(wind_velocity, device=device)
         wind_bearing_tensor = tensor(wind_bearing, device=device)
         mass_tensor = tensor(mass, device=device)
@@ -190,57 +189,44 @@ class Graph:
         coefficient_of_gravity_tensor = tensor(9.8, device=device)
         air_density_tensor = tensor(1.225, device=device)
 
-        node_index = 0
-
         starting_checkpoint = checkpoints[0]
-        print(starting_checkpoint)
         starting_point = starting_checkpoint.points(1)[0]
-        print(starting_point)
         starting_node = Node(
-            id=node_index,
             transitions=[],
-            kinetic_energy=tensor(0, device=device),
             position=starting_point,
             velocity=tensor(0, device=device),
-            motor_velocity=tensor(0, device=device),
+            id=uuid.uuid4().int
         )
-        node_index += 1
 
         graph = Graph(start=starting_node)
+        graph.nodes[starting_node.id] = starting_node
 
         current_layer: list[Node] = [starting_node]
 
         # Iterate over all the checkpoints, constructing each checkpoints corresponding layer of nodes
-        for i, checkpoint in tqdm(enumerate(checkpoints[1:])):
-            print(f"Processing checkpoint {i}. Layer size: {len(current_layer)}")
+        for i, checkpoint in enumerate(tqdm(checkpoints[1:])):
             location_points = checkpoint.points(n_points_per_checkpoint)
             targets: list[Node] = []
 
             if i is (len(checkpoints[1:]) - 1):
                 max_velocity_tensor = tensor(0, device=device)
-                max_motor_velocity_tensor = tensor(0, device=device)
+                print("Last node must be at 0m/s")
                 
             for location in location_points:
                 velocity = tensor(0, device=device)
-                while velocity <= max_velocity_tensor:
-                    motor_velocity = tensor(0, device=device)
-                    while motor_velocity <= max_motor_velocity_tensor:                        
-                        target = Node(
-                            node_index,
-                            transitions=[],
-                            kinetic_energy=tensor(0, device=device),
-                            position=location,
-                            velocity=velocity,
-                            motor_velocity=motor_velocity,
-                        )
+                while velocity <= max_velocity_tensor:                     
+                    target = Node(
+                        transitions=[],
+                        position=location,
+                        velocity=velocity,
+                        id=uuid.uuid4().int
+                    )
 
-                        targets.append(target)
-
-                        node_index += 1
-                        motor_velocity = motor_velocity + motor_velocity_step_size_tensor
+                    targets.append(target)
+                    graph.nodes[target.id] = target
                     velocity = velocity + velocity_step_size_tensor
 
-            for node in tqdm(current_layer):
+            for node in current_layer:
                 transitions = node.create_transition(
                     targets=targets,
                     mass=mass_tensor,
@@ -254,32 +240,10 @@ class Graph:
                 )
 
                 node.transitions.extend(transitions)
+                graph.nodes[node.id] = node
+
                 graph.end = node
 
             current_layer = targets
 
         return graph
-
-    # def get_nodes(self) -> set[Node]:
-    #     """Returns all nodes in the graph"""
-    #     visited_nodes = set()
-        
-    #     cursor = self.start
-    #     cursor_queue: list[Node] = []
-
-    #     while cursor is not None: 
-    #         for transition in cursor.transitions:
-    #             if transition.target not in visited_nodes:
-    #                 cursor_queue.append(transition.target)
-
-    #         visited_nodes.add(cursor)
-    #         next_node = None
-    #         while len(cursor_queue) > 0 and next_node is None:
-    #             candidate = cursor_queue.pop(0)
-    #             if candidate not in visited_nodes:
-    #                 next_node = candidate
-    #         cursor = next_node
-            
-                
-
-    #     return visited_nodes

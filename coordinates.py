@@ -48,9 +48,9 @@ class Location:
         cartesian_location = cartesian(latitude, longitude, altitude)
         
         # The earth is flat
-        relative_x = cartesian_origin[0] - cartesian_location[0]
-        relative_y = cartesian_origin[1] - cartesian_location[1]
-        relative_z = cartesian_origin[2] - cartesian_location[2]
+        relative_x = cartesian_location[0] - cartesian_origin[0]
+        relative_y = cartesian_location[1] - cartesian_origin[1]
+        relative_z = cartesian_location[2] - cartesian_origin[2]
         
         return Location(relative_x,relative_y, relative_z)
 
@@ -149,8 +149,6 @@ class Checkpoint:
             raise ValueError("A checkpoint must contain at least one point")
 
         distance = Location.distance(self.left, self.right)
-
-        print(f"left: {self.left}, right: {self.right}, distance: {distance}")
 
         # Track width is 0, just return the left point
         if distance == 0:
