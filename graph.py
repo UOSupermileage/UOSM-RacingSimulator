@@ -69,15 +69,17 @@ class Node:
         
         slopes = torch.tensor(
             [Location.slope(self.position, target.position) for target in targets],
+            dtype=torch.float64,
             device=device,
         )
         bearings = torch.tensor(
             [Location.bearing(self.position, target.position) for target in targets],
+            dtype=torch.float64,
             device=device,
         )
 
         target_velocities = torch.tensor(
-            [target.velocity for target in targets], device=device
+            [target.velocity for target in targets], dtype=torch.float64, device=device
         )
         
         weight = mass * coefficient_of_gravity # For forces!!!
@@ -89,10 +91,10 @@ class Node:
         forces_friction = torch.abs(coefficient_of_friction * weight * torch.cos(slopes))
 
         coefficents_of_drag = tensor(
-            [get_coefficent_of_drag(bearing) for bearing in bearings], device=device
+            [get_coefficent_of_drag(bearing) for bearing in bearings], dtype=torch.float64, device=device
         )
         projected_areas = tensor(
-            [get_projected_area(bearing) for bearing in bearings], device=device
+            [get_projected_area(bearing) for bearing in bearings], dtype=torch.float64, device=device
         )
 
         delta_bearings = wind_bearing - bearings
@@ -132,6 +134,7 @@ class Node:
         # Calculate the time required to transition to the given node
         delta_distances = torch.tensor(
             [Location.distance(self.position, target.position) for target in targets],
+            dtype=torch.float64, 
             device=device,
         )
 
@@ -180,21 +183,21 @@ class Graph:
         if len(checkpoints) < 1:
             raise ValueError("Cannot create Graph without at least 1 checkpoint")
 
-        max_velocity_tensor = tensor(max_velocity, device=device)
-        velocity_step_size_tensor = tensor(velocity_step_size, device=device)
-        wind_velocity_tensor = tensor(wind_velocity, device=device)
-        wind_bearing_tensor = tensor(wind_bearing, device=device)
-        mass_tensor = tensor(mass, device=device)
-        coefficient_of_friction_tensor = tensor(coefficient_of_friction, device=device)
-        coefficient_of_gravity_tensor = tensor(9.8, device=device)
-        air_density_tensor = tensor(1.225, device=device)
+        max_velocity_tensor = tensor(max_velocity, dtype=torch.float64, device=device)
+        velocity_step_size_tensor = tensor(velocity_step_size, dtype=torch.float64, device=device)
+        wind_velocity_tensor = tensor(wind_velocity, dtype=torch.float64, device=device)
+        wind_bearing_tensor = tensor(wind_bearing, dtype=torch.float64, device=device)
+        mass_tensor = tensor(mass, dtype=torch.float64, device=device)
+        coefficient_of_friction_tensor = tensor(coefficient_of_friction, dtype=torch.float64, device=device)
+        coefficient_of_gravity_tensor = tensor(9.8, dtype=torch.float64, device=device)
+        air_density_tensor = tensor(1.225, dtype=torch.float64, device=device)
 
         starting_checkpoint = checkpoints[0]
         starting_point = starting_checkpoint.points(1)[0]
         starting_node = Node(
             transitions=[],
             position=starting_point,
-            velocity=tensor(0, device=device),
+            velocity=tensor(0, dtype=torch.float64, device=device),
             id=uuid.uuid4().int
         )
 
@@ -209,11 +212,11 @@ class Graph:
             targets: list[Node] = []
 
             if i is (len(checkpoints[1:]) - 1):
-                max_velocity_tensor = tensor(0, device=device)
+                max_velocity_tensor = tensor(0, dtype=torch.float64, device=device)
                 print("Last node must be at 0m/s")
                 
             for location in location_points:
-                velocity = tensor(0, device=device)
+                velocity = tensor(0, dtype=torch.float64, device=device)
                 while velocity <= max_velocity_tensor:                     
                     target = Node(
                         transitions=[],

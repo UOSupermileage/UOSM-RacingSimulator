@@ -1,6 +1,7 @@
 import pandas as pd
 from coordinates import Checkpoint, Location, device
 from torch import tensor
+import torch
 
 track_data = pd.read_csv("./sem_2023_us.csv")
 
@@ -12,7 +13,7 @@ track_data.head(10)
 
 checkpoints: list[Checkpoint] = []
 for i, row in track_data.iterrows():
-    location = Location(tensor(row["Latitude"], device=device), tensor(row["Longitude"], device=device), tensor(row["Altitude"], device=device))
+    location = Location(tensor(row["Latitude"], dtype=torch.float64, device=device), tensor(row["Longitude"],dtype=torch.float64,  device=device), tensor(row["Altitude"], dtype=torch.float64, device=device))
     checkpoints.append(Checkpoint(location, location))
 
 from graph import Graph

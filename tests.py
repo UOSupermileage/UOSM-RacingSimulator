@@ -1,12 +1,13 @@
 from coordinates import Location
 from torch import tensor, FloatTensor
+import torch
 
 def test_location_distance():
     """
     Test the flat distance between two points in cartesian space
     """
-    a = Location(tensor(2), tensor(2), tensor(0))
-    b = Location(tensor(5), tensor(6), tensor(0))
+    a = Location(tensor(2, dtype=torch.float64), tensor(2, dtype=torch.float64), tensor(0, dtype=torch.float64))
+    b = Location(tensor(5, dtype=torch.float64), tensor(6, dtype=torch.float64), tensor(0, dtype=torch.float64))
 
     distance = a.distance(b)
 
@@ -21,4 +22,4 @@ def test_location_construct():
 
     distance = a.distance(b)
 
-    assert distance == tensor(1.375,device="cuda")
+    assert distance == tensor(1.375, dtype=torch.float64, device="cuda")
