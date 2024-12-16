@@ -10,6 +10,20 @@ device: str
 earth_radius: tensor
 origin: tensor
 
+def cartesian(longitude: float, latitude: float, elevation: float, origin_latitude: float = 39.7881314579999, origin_longitude: float = -86.238784119, origin_altitude: float = 218.9818):
+    """Create a cartisian point from long and lat in degrees and elevation in meters."""
+
+    lat = torch.deg2rad(tensor(latitude, dtype=torch.float64, device=device))
+    long = torch.deg2rad(tensor(longitude, dtype=torch.float64, device=device))
+    alt = tensor(elevation, dtype=torch.float64,  device=device) - tensor(218.9818, dtype=torch.float64,  device=device)
+
+    lat0 = torch.deg2rad(torch.tensor(origin_latitude, dtype=torch.float64,  device=device))
+    lon0 = torch.deg2rad(torch.tensor(origin_longitude, dtype=torch.float64,  device=device))
+    
+    X = earth_radius * (long - lon0) * torch.cos(lat0)
+    Y = earth_radius * (lat - lat0)
+    
+    return X, Y, alt
 
 def setup(device_name: str):
     global device
@@ -18,41 +32,22 @@ def setup(device_name: str):
 
     device = device_name
 
-    earth_radius = tensor(6378137, device=device)
-    origin = tensor((39.7881314579999,-86.238784119, 218.9818), device=device)
+    earth_radius = tensor(6378137, dtype=torch.float64, device=device)
 
 setup("cuda")
 
 @dataclass(slots=True)
 class Location:
-    """Represents a location on a sphere."""
+    """Represents a location in cartesian 3D."""
 
-    x: FloatTensor  # in degrees
-    y: FloatTensor  # in degrees
+    x: FloatTensor  # in meters
+    y: FloatTensor  # in meters
     z: FloatTensor  # in meters
 
     def construct(latitude: float, longitude: float, altitude: float) -> Location:
-        
-        latitude = tensor(latitude, device=device)
-        longitude = tensor(longitude, device=device)
-        altitude = tensor(altitude, device=device)
-
-        def cartesian(longitude,latitude, elevation):
-            R = earth_radius + elevation  # relative to centre of the earth
-            X = R * torch.cos(longitude) * torch.sin(latitude)
-            Y = R * torch.sin(longitude) * torch.sin(latitude)
-            
-            return X, Y, elevation
-
-        cartesian_origin = cartesian(origin[0], origin[1], origin[2])
-        cartesian_location = cartesian(latitude, longitude, altitude)
-        
-        # The earth is flat
-        relative_x = cartesian_location[0] - cartesian_origin[0]
-        relative_y = cartesian_location[1] - cartesian_origin[1]
-        relative_z = cartesian_location[2] - cartesian_origin[2]
-        
-        return Location(relative_x,relative_y, relative_z)
+        """Construct a location from latitude and longitude in degrees. Altitude in meters."""
+        X, Y, lat = cartesian(latitude, longitude, altitude)        
+        return Location(X, Y, lat)
 
     def distance_with_z(
         a: Location,

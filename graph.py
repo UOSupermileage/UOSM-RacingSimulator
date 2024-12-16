@@ -247,3 +247,6 @@ class Graph:
             current_layer = targets
 
         return graph
+    
+    def get_node(self, id: int) -> Node | None:
+        return self.nodes[id] if id in self.nodes else None
