@@ -15,7 +15,7 @@ def cartesian(longitude: float, latitude: float, elevation: float, origin_latitu
 
     lat = torch.deg2rad(tensor(latitude, dtype=torch.float64, device=device))
     long = torch.deg2rad(tensor(longitude, dtype=torch.float64, device=device))
-    alt = tensor(elevation, dtype=torch.float64,  device=device) - tensor(218.9818, dtype=torch.float64,  device=device)
+    alt = tensor(elevation, dtype=torch.float64,  device=device) - tensor(origin_altitude dtype=torch.float64,  device=device)
 
     lat0 = torch.deg2rad(torch.tensor(origin_latitude, dtype=torch.float64,  device=device))
     lon0 = torch.deg2rad(torch.tensor(origin_longitude, dtype=torch.float64,  device=device))
