@@ -84,8 +84,6 @@ class Location:
     ) -> Location:
         """Interpolation a position on a sphere of a given radius that is distance towards b from a"""
         
-        print(f"ax: {a.x}, bx: {b.x}, ay: {a.y}, by: {b.y}")
-
         if a.x == b.x and a.y == b.y:
             print("Warning: a and b are identical")
 
@@ -103,8 +101,6 @@ class Location:
                 return tensor(torch.pi * 3 / 2, dtype=torch.float64,  device=device)
 
         angle = torch.atan(dy/dx)
-
-        print(f"dx: {dx}, dy: {dy}, angle: {angle}")
         
         destination_x = distance * torch.cos(angle)
         destination_y = distance * torch.sin(angle)

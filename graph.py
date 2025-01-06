@@ -72,6 +72,7 @@ class Node:
             dtype=torch.float64,
             device=device,
         )
+
         bearings = torch.tensor(
             [Location.bearing(self.position, target.position) for target in targets],
             dtype=torch.float64,
@@ -85,10 +86,10 @@ class Node:
         weight = mass * coefficient_of_gravity # For forces!!!
 
         # Gravitational Force (Weight)'s parallel component, assists you down a slope, resists you up a slope
-        forces_gx = torch.abs(weight * torch.sin(slopes))
+        forces_gx = weight * torch.sin(slopes)
 
         # Frictional Force, it always opposes velocity
-        forces_friction = torch.abs(coefficient_of_friction * weight * torch.cos(slopes))
+        forces_friction = coefficient_of_friction * weight * torch.cos(slopes)
 
         coefficents_of_drag = tensor(
             [get_coefficent_of_drag(bearing) for bearing in bearings], dtype=torch.float64, device=device
@@ -98,18 +99,18 @@ class Node:
         )
 
         delta_bearings = wind_bearing - bearings
-        opposing_wind_velocities = wind_velocity * torch.cos(delta_bearings)
+        effective_wind_velocities = wind_velocity * torch.cos(delta_bearings)
         
         # Consider the average to be more acurate since we don't instantly accelerate
         average_target_velocities = (self.velocity + target_velocities) / 2
         
         # The relative of the wind with respect to the car
-        effective_wind_velocities = average_target_velocities - opposing_wind_velocities
+        relative_wind_velocities = average_target_velocities - effective_wind_velocities
 
         forces_drag = (
             0.5
             * air_density
-            * effective_wind_velocities * effective_wind_velocities
+            * relative_wind_velocities * relative_wind_velocities
             * coefficents_of_drag
             * projected_areas
         )
@@ -120,20 +121,19 @@ class Node:
         )
         
         # The x component of gravity always apposes
-        affecting_forces = -forces_friction
+        affecting_forces = torch.abs(forces_friction)
 
-        # If the slope is a negative incline, gravity assists the motion
-        affecting_forces += torch.where(slopes < 0, forces_gx, -forces_gx)
+        # If the slope is a negative incline, force is negative (gravity assists the motion) else force is positive.
+        affecting_forces += forces_gx
 
         # If the wind is going faster in the same direction as the car
-        # TODO: This is innacurate if we accelerate faster than the wind speed throughout the step
         affecting_forces += torch.where(
-            effective_wind_velocities > 0, forces_drag, -forces_drag
+            relative_wind_velocities > 0, forces_drag, -forces_drag
         )
-                
-        # Calculate the time required to transition to the given node
+
+        # Calculate the distance required to transition to the given node
         delta_distances = torch.tensor(
-            [Location.distance(self.position, target.position) for target in targets],
+            [Location.distance_with_z(self.position, target.position) for target in targets],
             dtype=torch.float64, 
             device=device,
         )
@@ -145,7 +145,7 @@ class Node:
 
         delta_velocities = target_velocities - self.velocity
 
-        time_required = torch.abs(2 * delta_distances / delta_velocities)
+        time_required = 2 * delta_distances / torch.abs(delta_velocities)
 
         transitions = [
             Transition(target, work_required_item, time_required_item, uuid.uuid4().int)
@@ -189,7 +189,7 @@ class Graph:
         wind_bearing_tensor = tensor(wind_bearing, dtype=torch.float64, device=device)
         mass_tensor = tensor(mass, dtype=torch.float64, device=device)
         coefficient_of_friction_tensor = tensor(coefficient_of_friction, dtype=torch.float64, device=device)
-        coefficient_of_gravity_tensor = tensor(9.8, dtype=torch.float64, device=device)
+        coefficient_of_gravity_tensor = tensor(9.81, dtype=torch.float64, device=device)
         air_density_tensor = tensor(1.225, dtype=torch.float64, device=device)
 
         starting_checkpoint = checkpoints[0]
